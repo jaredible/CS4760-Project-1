@@ -84,6 +84,7 @@ int depthfirstapply(char *path, int pathfun(char *path1), int depth) {
 		if (S_ISDIR(mode)) {
 			if (strcmp(name, ".") == 0 || strcmp(name, "..") == 0) continue;
 			int size = depthfirstapply(fullpath, pathfun, depth + 1);
+			size += stats.st_size;
 			if (size >= 0) {
 				printf("%-7d %s\n", size, fullpath);
 				result += size;
@@ -105,14 +106,14 @@ int depthfirstapply(char *path, int pathfun(char *path1), int depth) {
 int sizepathfun(char *path) {
 	struct stat stats;
 	
-	if (stat(path, &stats) == -1) {
+	if (lstat(path, &stats) == -1) {
 		perror("Error");
 		return -1;
 	}
 	
 	mode_t mode = stats.st_mode;
 	
-	if (S_ISREG(mode)) return stats.st_size;
+	if (S_ISREG(mode) | S_ISLNK(mode)) return stats.st_size;
 	
 	return -1;
 }
