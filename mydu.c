@@ -1,7 +1,14 @@
+#include <dirent.h>
+#include <errno.h>
 #include <getopt.h>
+#include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
+#include <sys/statvfs.h>
+#include <sys/types.h>
+#include <unistd.h>
 
 char options[10];
 int scaler = -1;
@@ -34,17 +41,78 @@ int main(int argc, char *argv[]) {
 		}
 	}
 	
+	int size = 0;
+	if (argv[optind] == NULL) size += showtreesize(".");
+	else {
+		for (; optind < argc; optind++) {
+			size += showtreesize(argv[optind]);
+		}
+	}
+	printf("%-7d total\n", size);
+	
 	return EXIT_SUCCESS;
 }
 
 int showtreesize(char *path) {
-	return 0;
+	int size = depthfirstapply(path, sizepathfun, 0);
+	printf("%-7d %s\n", size, path);
+	return size;
 }
 
 int depthfirstapply(char *path, int pathfun(char *path1), int depth) {
-	return 0;
+	int result = 0;
+	
+	DIR *dir;
+	struct dirent *entry;
+	struct stat stats;
+	
+	if (!(dir = opendir(path))) {
+		perror("Error");
+		return -1;
+	}
+	
+	while ((entry = readdir(dir)) != NULL) {
+		char *name = entry->d_name;
+		
+		char fullpath[256];
+		sprintf(fullpath, "%s/%s", path, name);
+		
+		lstat(fullpath, &stats);
+		
+		int mode = stats.st_mode;
+		
+		if (S_ISDIR(mode)) {
+			if (strcmp(name, ".") == 0 || strcmp(name, "..") == 0) continue;
+			int size = depthfirstapply(fullpath, pathfun, depth + 1);
+			if (size >= 0) {
+				printf("%-7d %s\n", size, fullpath);
+				result += size;
+			}
+		} else {
+			int size = pathfun(fullpath);
+			if (size >= 0) {
+				printf("%-7d %s\n", size, fullpath);
+				result += size;
+			}
+		}
+	}
+	
+	closedir(dir);
+	
+	return result;
 }
 
 int sizepathfun(char *path) {
-	return 0;
+	struct stat stats;
+	
+	if (stat(path, &stats) == -1) {
+		perror("Error");
+		return -1;
+	}
+	
+	mode_t mode = stats.st_mode;
+	
+	if (S_ISREG(mode)) return stats.st_size;
+	
+	return -1;
 }
