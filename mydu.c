@@ -7,8 +7,9 @@ char options[10];
 int scaler = -1;
 int max_depth = -1;
 
-int depthfirstapply(char *path, int pathfun(char *path1), int depth);
 int sizepathfun(char *path);
+int depthfirstapply(char *path, int pathfun(char *path1), int depth);
+int showtreesize(char *path);
 
 int main(int argc, char *argv[]) {
 	int opt;
@@ -34,6 +35,10 @@ int main(int argc, char *argv[]) {
 	}
 	
 	return EXIT_SUCCESS;
+}
+
+int showtreesize(char *path) {
+	return 0;
 }
 
 int depthfirstapply(char *path, int pathfun(char *path1), int depth) {
