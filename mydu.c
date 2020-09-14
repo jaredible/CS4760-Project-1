@@ -1,7 +1,8 @@
-// Title:	Implementation of UNIX du Shell Command in C
+// Title:	Implementation of the UNIX du Shell Command in C
 // Filename:	mydu.c
-// Usage:	./mydu [-h] [-a] [-B M | -b | -m] [-c] [-d N] [-H] [-L] [-s] <dir1> <dir2> ...
-// Author:	Jared Diehl (jmddnb@umsystem.edu)
+// Usage:	./mydu [-h]
+// 		./mydu [-a] [-B M | -b | -m] [-c] [-d N] [-H] [-L] [-s] <dir1> <dir2> ...
+// Author:	Jared Diehl
 // Date:	September 14, 2020
 // Description:	Displays the size of subdirectories of the tree rooted at the
 // 		directories/files specified on the command-line arguments.
@@ -20,66 +21,69 @@
 #include <sys/types.h>
 #include <unistd.h>
 
-struct node {
-	int value;
-	struct node *next;
+#define DEFAULT_BLOCK_SIZE 1024
+
+struct inode {
+	ino_t value;
+	struct inode *next;
 };
 
-char options[10];
 const char *program_name = NULL;
 static bool opt_all = false;
+static bool opt_summarize_only = false;
 static bool apparent_size = false;
-static bool print_grand_total = false;
+static bool max_depth_specified = false;
 static int max_depth = 999;
 static bool human_output = false;
 static bool symlink_deref = false;
 static int output_block_size;
-static struct node *inodes;
 
-struct node *create(int value);
-void add(int value);
-bool contains(int value);
-void display();
+static struct inode *inodes;
+
+struct inode *inode_create(ino_t value);
+void inode_add(ino_t value);
+bool inode_contains(ino_t value);
+void inode_display();
 
 int showtreesize(char *path);
 int depthfirstapply(char *path, int pathfun(char *path1), int level);
 int sizepathfun(char *path);
-void showformattedusage(int size, char *path);
+void showformattedusage(int size, char *info);
 
-void set_program_name(const char *argv0) {
-	program_name = argv0;
+void set_program_name(const char *name) {
+	program_name = name;
 }
 
-struct node *create(int value) {
-	struct node *new = malloc(sizeof(struct node));
+struct inode *inode_create(ino_t value) {
+	struct inode *new = malloc(sizeof(struct inode));
 	new->value = value;
 	new->next = NULL;
 	return new;
 }
 
-void add(int value) {
-	struct node *current = NULL;
-	if (inodes == NULL) inodes = create(value);
+void inode_add(ino_t value) {
+	struct inode *current = NULL;
+	if (inodes == NULL) inodes = inode_create(value);
 	else {
 		current = inodes;
 		while (current->next != NULL)
 			current = current->next;
-		current->next = create(value);
+		current->next = inode_create(value);
 	}
 }
 
-bool contains(int value) {
-	struct node *current = inodes;
+bool inode_contains(ino_t value) {
+	struct inode *current = inodes;
 	if (inodes == NULL) return false;
 	for (; current != NULL; current = current->next)
 		if (current->value == value) return true;
 	return false;
 }
 
-void display() {
-	struct node *current = inodes;
+void inode_display() {
+	struct inode *current = inodes;
 	for (; current != NULL; current = current->next)
-		printf("%d\n", current->value);
+		printf("%d\n", (int) current->value);
 }
 
 void error(const char *fmt, ...) {
@@ -156,17 +160,15 @@ void human_options(const char *spec) {
 int main(int argc, char **argv) {
 	set_program_name(argv[0]);
 	
-	bool max_depth_specified = false;
-	bool opt_summarize_only = false;
+	bool print_grand_total = false;
 	bool ok = true;
 	
-	int opt;
-	while ((opt = getopt(argc, argv, "habd:cHmsB:L")) != -1) {
-		char str[2];
-		sprintf(str, "%c", opt);
-		strcat(options, str);
+	while (true) {
+		int c = getopt(argc, argv, "habd:cHmsB:L");
 		
-		switch (opt) {
+		if (c == -1) break;
+		
+		switch (c) {
 			case 'h':
 				usage(EXIT_SUCCESS);
 			case 'a':
@@ -226,30 +228,28 @@ int main(int argc, char **argv) {
 		usage(EXIT_FAILURE);
 	}
 	
-	if (opt_summarize_only) {
-		max_depth = 0;
-	}
+	if (opt_summarize_only) max_depth = 0;
 	
-	char *pwd = ".";
-	int totalsize = 0;
+	char *cwd = ".";
+	int total_size = 0;
 	
 	if (argv[optind] == NULL) {
-		int size = showtreesize(pwd);
-		totalsize += size;
+		int size = showtreesize(cwd);
+		if (size >= 0) total_size += size;
 	} else {
 		for (; optind < argc; optind++) {
 			char *path = argv[optind];
 			int size = sizepathfun(path);
 			if (size >= 0) {
-				totalsize += size;
+				total_size += size;
 				showformattedusage(size, path);
-			} else totalsize += showtreesize(path);
+			} else total_size += showtreesize(path);
 		}
 	}
 	
-	if (strstr(options, "c") != NULL) showformattedusage(totalsize, "total");
+	if (print_grand_total) showformattedusage(total_size, "total");
 	
-	return EXIT_SUCCESS;
+	return ok ? EXIT_SUCCESS: EXIT_FAILURE;
 }
 
 int showtreesize(char *path) {
@@ -271,9 +271,9 @@ int showtreesize(char *path) {
 }
 
 int depthfirstapply(char *path, int pathfun(char *path1), int level) {
-	if (strstr(options, "d") != NULL && level > max_depth) return -1;
+	int total_size = 0;
 	
-	int result = 0;
+	bool max_depth_exceeded = max_depth_specified && level > max_depth;
 	
 	DIR *dir;
 	struct dirent *entry;
@@ -287,71 +287,70 @@ int depthfirstapply(char *path, int pathfun(char *path1), int level) {
 	while ((entry = readdir(dir)) != NULL) {
 		char *name = entry->d_name;
 		
-		char fullpath[255];
-		sprintf(fullpath, "%s/%s", path, name);
+		char full_path[256];
+		sprintf(full_path, "%s/%s", path, name);
 		
-		if (lstat(fullpath, &stats) == -1) {
+		if (lstat(full_path, &stats) == -1) {
 			perror("lstat");
 			return -1;
 		}
 		
-		int mode = stats.st_mode;
-		int inode = stats.st_ino;
+		mode_t mode = stats.st_mode;
+		ino_t inode = stats.st_ino;
 		
 		if (strcmp(name, ".") == 0 || strcmp(name, "..") == 0) continue;
 		
-		if (contains(inode)) continue;
-		add(inode);
+		if (inode_contains(inode)) continue;
+		inode_add(inode);
 		
 		if (S_ISDIR(mode)) {
-			int size = depthfirstapply(fullpath, pathfun, level + 1);
+			int size = depthfirstapply(full_path, pathfun, level + 1);
 			
 			if (apparent_size) size += stats.st_size;
 			else size += stats.st_blocks;
 			
 			if (size >= 0) {
-				result += size;
-				if (strstr(options, "s") == NULL) showformattedusage(size, fullpath);
+				total_size += size;
+				if (!opt_summarize_only && !max_depth_exceeded) showformattedusage(size, full_path);
 			}
 		} else if (S_ISLNK(mode) && symlink_deref) {
-			if (stat(fullpath, &stats) == -1) {
+			if (stat(full_path, &stats) == -1) {
 				perror("stat");
 				return -1;
 			}
 			
 			inode = stats.st_ino;
 			
-			if (contains(inode)) continue;
-			add(inode);
+			if (inode_contains(inode)) continue;
+			inode_add(inode);
 			
-			int size = depthfirstapply(fullpath, pathfun, level + 1);
+			int size = depthfirstapply(full_path, pathfun, level + 1);
 			
 			if (apparent_size) size += stats.st_size;
 			else size += stats.st_blocks;
 			
 			if (size >= 0) {
-				result += size;
-				if (strstr(options, "s") == NULL) showformattedusage(size, fullpath);
+				total_size += size;
+				if (!opt_summarize_only && !max_depth_exceeded) showformattedusage(size, full_path);
 			}
 		} else {
-			int size = pathfun(fullpath);
+			int size = pathfun(full_path);
 			
 			if (size >= 0) {
-				result += size;
-				if (strstr(options, "a") != NULL) showformattedusage(size, fullpath);
+				total_size += size;
+				if (opt_all && !max_depth_exceeded) showformattedusage(size, full_path);
 			} else {
-				int s = 0;
-				if (apparent_size) s = stats.st_size;
-				else s = stats.st_blocks;
-				result += s;
-				if (opt_all && strstr(options, "s") == NULL) showformattedusage(s, fullpath);
+				if (apparent_size) size = stats.st_size;
+				else size = stats.st_blocks;
+				total_size += size;
+				if (opt_all && !opt_summarize_only && !max_depth_exceeded) showformattedusage(size, full_path);
 			}
 		}
 	}
 	
 	closedir(dir);
 	
-	return result;
+	return total_size;
 }
 
 int sizepathfun(char *path) {
@@ -362,8 +361,11 @@ int sizepathfun(char *path) {
 		return -1;
 	}
 	
+	ino_t inode = stats.st_ino;
+	if (!inode_contains(inode)) inode_add(inode);
+	
 	if (S_ISREG(stats.st_mode)) {
-		int size = 0;
+		int size;
 		if (apparent_size) size = stats.st_size;
 		else size = stats.st_blocks;
 		return size;
@@ -372,7 +374,7 @@ int sizepathfun(char *path) {
 	return -1;
 }
 
-void showformattedusage(int size, char *path) {
+void showformattedusage(int size, char *info) {
 	char *result = malloc(sizeof(char) * 255);
 	
 	if (human_output) {
@@ -390,24 +392,28 @@ void showformattedusage(int size, char *path) {
 	} else {
 		if (apparent_size) sprintf(result, "%d", size);
 		else {
-			if (output_block_size > 1) { //strstr(options, "B") != NULL) {
-				size = size * S_BLKSIZE / output_block_size;
+			if (output_block_size >= (1 << 20)) {
+				int blocks = size * S_BLKSIZE / output_block_size;
 				
-				if (size < 1) size = 1;
+				if (blocks < 1) blocks = 1;
 				
-				if (output_block_size == (1 << 30)) sprintf(result, "%dG", size);
-				else if (output_block_size == (1 << 20)) sprintf(result, "%dM", size);
-				else if (output_block_size == (1 << 10)) sprintf(result, "%dK", size);
-				else sprintf(result, "%d", size);
+				sprintf(result, "%d", blocks);
+			} else if (output_block_size > 1) {
+				int blocks = size * S_BLKSIZE / output_block_size;
+				
+				if (blocks < 1) blocks = 1;
+				
+				if (output_block_size == (1 << 30)) sprintf(result, "%dG", blocks);
+				else if (output_block_size == (1 << 20)) sprintf(result, "%dM", blocks);
+				else if (output_block_size == (1 << 10)) sprintf(result, "%dK", blocks);
+				else sprintf(result, "%d", blocks);
 			} else {
-				if (strstr(options, "m") != NULL) {
-					size = size * S_BLKSIZE / output_block_size;
-					if (size < 1) size = 1;
-					sprintf(result, "%d", size);
-				} else sprintf(result, "%d", size * S_BLKSIZE / 1024);
+				int blocks = size * S_BLKSIZE / DEFAULT_BLOCK_SIZE;
+				
+				sprintf(result, "%d", blocks);
 			}
 		}
 	}
 	
-	printf("%-7s %s\n", result, path);
+	printf("%-7s %s\n", result, info);
 }
