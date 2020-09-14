@@ -1,11 +1,11 @@
-// Title:	Implementation of the UNIX du Shell Command in C
-// Filename:	mydu.c
-// Usage:	./mydu [-h]
-// 		./mydu [-a] [-B M | -b | -m] [-c] [-d N] [-H] [-L] [-s] <dir1> <dir2> ...
-// Author:	Jared Diehl
-// Date:	September 14, 2020
-// Description:	Displays the size of subdirectories of the tree rooted at the
-// 		directories/files specified on the command-line arguments.
+// Title:		Implementation of the UNIX du Shell Command in C
+// Filename:		mydu.c
+// Usage:		./mydu [-h]
+// 			./mydu [-a] [-B M | -b | -m] [-c] [-d N] [-H] [-L] [-s] <dir1> <dir2> ...
+// Author:		Jared Diehl
+// Date:		September 14, 2020
+// Description:		Displays the size of subdirectories of the tree rooted at the
+// 			directories/files specified on the command-line arguments.
 
 #include <ctype.h>
 #include <dirent.h>
@@ -22,6 +22,7 @@
 #include <unistd.h>
 
 #define DEFAULT_BLOCK_SIZE 1024
+#define DEFAULT_MAX_DEPTH 999
 
 struct inode {
 	ino_t value;
@@ -32,13 +33,13 @@ const char *program_name = NULL;
 static bool opt_all = false;
 static bool opt_summarize_only = false;
 static bool apparent_size = false;
+static bool opt_block_scaler = false;
 static bool max_depth_specified = false;
-static int max_depth = 999;
+static int max_depth = DEFAULT_MAX_DEPTH;
 static bool human_output = false;
 static bool symlink_deref = false;
 static int output_block_size;
-
-static struct inode *inodes;
+struct inode *inodes;
 
 struct inode *inode_create(ino_t value);
 void inode_add(ino_t value);
@@ -48,11 +49,8 @@ void inode_display();
 int showtreesize(char *path);
 int depthfirstapply(char *path, int pathfun(char *path1), int level);
 int sizepathfun(char *path);
+int sizeoptions(struct stat *stats);
 void showformattedusage(int size, char *info);
-
-void set_program_name(const char *name) {
-	program_name = name;
-}
 
 struct inode *inode_create(ino_t value) {
 	struct inode *new = malloc(sizeof(struct inode));
@@ -84,6 +82,10 @@ void inode_display() {
 	struct inode *current = inodes;
 	for (; current != NULL; current = current->next)
 		printf("%d\n", (int) current->value);
+}
+
+void set_program_name(const char *name) {
+	program_name = name;
 }
 
 void error(const char *fmt, ...) {
@@ -144,10 +146,10 @@ int get_index(char *string, char c) {
 }
 
 void human_options(const char *spec) {
+	human_output = false;
+	
 	if (isdigit(*spec)) output_block_size = atoi(spec);
 	else {
-		apparent_size = false;
-		human_output = false;
 		char *s = "KMG";
 		int i;
 		if ((i = get_index(s, *spec)) == -1) {
@@ -160,6 +162,8 @@ void human_options(const char *spec) {
 int main(int argc, char **argv) {
 	set_program_name(argv[0]);
 	
+	char *cwd = ".";
+	int total_size = 0;
 	bool print_grand_total = false;
 	bool ok = true;
 	
@@ -202,6 +206,7 @@ int main(int argc, char **argv) {
 				opt_summarize_only = true;
 				break;
 			case 'B':
+				opt_block_scaler = true;
 				human_options(optarg);
 				break;
 			case 'L':
@@ -230,9 +235,6 @@ int main(int argc, char **argv) {
 	
 	if (opt_summarize_only) max_depth = 0;
 	
-	char *cwd = ".";
-	int total_size = 0;
-	
 	if (argv[optind] == NULL) {
 		int size = showtreesize(cwd);
 		if (size >= 0) total_size += size;
@@ -260,10 +262,7 @@ int showtreesize(char *path) {
 		return -1;
 	}
 	
-	int size = depthfirstapply(path, sizepathfun, 1);
-	
-	if (apparent_size) size += stats.st_size;
-	else size += stats.st_blocks;
+	int size = depthfirstapply(path, sizepathfun, 1) + sizeoptions(&stats);
 	
 	showformattedusage(size, path);
 	
@@ -304,10 +303,7 @@ int depthfirstapply(char *path, int pathfun(char *path1), int level) {
 		inode_add(inode);
 		
 		if (S_ISDIR(mode)) {
-			int size = depthfirstapply(full_path, pathfun, level + 1);
-			
-			if (apparent_size) size += stats.st_size;
-			else size += stats.st_blocks;
+			int size = depthfirstapply(full_path, pathfun, level + 1) + sizeoptions(&stats);
 			
 			if (size >= 0) {
 				total_size += size;
@@ -324,10 +320,7 @@ int depthfirstapply(char *path, int pathfun(char *path1), int level) {
 			if (inode_contains(inode)) continue;
 			inode_add(inode);
 			
-			int size = depthfirstapply(full_path, pathfun, level + 1);
-			
-			if (apparent_size) size += stats.st_size;
-			else size += stats.st_blocks;
+			int size = depthfirstapply(full_path, pathfun, level + 1) + sizeoptions(&stats);
 			
 			if (size >= 0) {
 				total_size += size;
@@ -340,9 +333,7 @@ int depthfirstapply(char *path, int pathfun(char *path1), int level) {
 				total_size += size;
 				if (opt_all && !max_depth_exceeded) showformattedusage(size, full_path);
 			} else {
-				if (apparent_size) size = stats.st_size;
-				else size = stats.st_blocks;
-				total_size += size;
+				total_size += sizeoptions(&stats);
 				if (opt_all && !opt_summarize_only && !max_depth_exceeded) showformattedusage(size, full_path);
 			}
 		}
@@ -364,56 +355,57 @@ int sizepathfun(char *path) {
 	ino_t inode = stats.st_ino;
 	if (!inode_contains(inode)) inode_add(inode);
 	
-	if (S_ISREG(stats.st_mode)) {
-		int size;
-		if (apparent_size) size = stats.st_size;
-		else size = stats.st_blocks;
-		return size;
-	}
+	if (S_ISREG(stats.st_mode)) return sizeoptions(&stats);
 	
 	return -1;
 }
 
+int sizeoptions(struct stat *stats) {
+	if (apparent_size) return stats->st_size;
+	else return stats->st_blocks;
+}
+
 void showformattedusage(int size, char *info) {
-	char *result = malloc(sizeof(char) * 255);
+	char *pretty_size = malloc(sizeof(char) * 256);
 	
 	if (human_output) {
 		int bytes = size * S_BLKSIZE;
 		
 		if (apparent_size) bytes = size;
 		
-		if (bytes >= 10L * (1 << 30)) sprintf(result, "%dG", bytes / (1 << 30));
-		else if (bytes >= (1 << 30)) sprintf(result, "%2.1fG", (float) (bytes / 1e9));
-		else if (bytes >= 10 * (1 << 20)) sprintf(result, "%dM", bytes / (1 << 20));
-		else if (bytes >= (1 << 20)) sprintf(result, "%2.1fM", (float) (bytes / 1e6));
-		else if (bytes >= 10 * (1 << 10)) sprintf(result, "%dK", bytes / (1 << 10));
-		else if (bytes >= (1 << 10)) sprintf(result, "%2.1fK", (float) (bytes / 1e3));
-		else sprintf(result, "%d", bytes);
+		if (bytes >= 10L * (1 << 30)) sprintf(pretty_size, "%dG", bytes / (1 << 30));
+		else if (bytes >= (1 << 30)) sprintf(pretty_size, "%2.1fG", (float) (bytes / 1e9));
+		else if (bytes >= 10 * (1 << 20)) sprintf(pretty_size, "%dM", bytes / (1 << 20));
+		else if (bytes >= (1 << 20)) sprintf(pretty_size, "%2.1fM", (float) (bytes / 1e6));
+		else if (bytes >= 10 * (1 << 10)) sprintf(pretty_size, "%dK", bytes / (1 << 10));
+		else if (bytes >= (1 << 10)) sprintf(pretty_size, "%2.1fK", (float) (bytes / 1e3));
+		else sprintf(pretty_size, "%d", bytes);
 	} else {
-		if (apparent_size) sprintf(result, "%d", size);
-		else {
-			if (output_block_size >= (1 << 20)) {
+		if (opt_block_scaler) {
+			int blocks = size * S_BLKSIZE / output_block_size;
+			
+			if (blocks < 1) blocks = 1;
+			
+			if (output_block_size == (1 << 30)) sprintf(pretty_size, "%dG", blocks);
+			else if (output_block_size == (1 << 20)) sprintf(pretty_size, "%dM", blocks);
+			else if (output_block_size == (1 << 10)) sprintf(pretty_size, "%dK", blocks);
+			else sprintf(pretty_size, "%d", blocks);
+		} else if (apparent_size) {
+			sprintf(pretty_size, "%d", size);
+		} else {
+			if (output_block_size == (1 << 20)) {
 				int blocks = size * S_BLKSIZE / output_block_size;
 				
 				if (blocks < 1) blocks = 1;
 				
-				sprintf(result, "%d", blocks);
-			} else if (output_block_size > 1) {
-				int blocks = size * S_BLKSIZE / output_block_size;
-				
-				if (blocks < 1) blocks = 1;
-				
-				if (output_block_size == (1 << 30)) sprintf(result, "%dG", blocks);
-				else if (output_block_size == (1 << 20)) sprintf(result, "%dM", blocks);
-				else if (output_block_size == (1 << 10)) sprintf(result, "%dK", blocks);
-				else sprintf(result, "%d", blocks);
+				sprintf(pretty_size, "%d", blocks);
 			} else {
 				int blocks = size * S_BLKSIZE / DEFAULT_BLOCK_SIZE;
 				
-				sprintf(result, "%d", blocks);
+				sprintf(pretty_size, "%d", blocks);
 			}
 		}
 	}
 	
-	printf("%-7s %s\n", result, info);
+	printf("%-7s %s\n", pretty_size, info);
 }
