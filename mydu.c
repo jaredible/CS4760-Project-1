@@ -10,6 +10,7 @@
 #include <dirent.h>
 #include <errno.h>
 #include <getopt.h>
+#include <stdarg.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -19,28 +20,21 @@
 #include <sys/types.h>
 #include <unistd.h>
 
-struct pinfo {
-	char *program_name;
-	char options[10];
-	int scaler;
-	int max_depth;
-	struct node *inodes;
-};
-
 struct node {
 	int value;
 	struct node *next;
 };
 
-static struct pinfo *program_info;
-
+char options[10];
 const char *program_name = NULL;
 static bool opt_all = false;
 static bool apparent_size = false;
 static bool print_grand_total = false;
 static int max_depth = 999;
 static bool human_output = false;
+static bool symlink_deref = false;
 static int output_block_size;
+static struct node *inodes;
 
 struct node *create(int value);
 void add(int value);
@@ -48,11 +42,9 @@ bool contains(int value);
 void display();
 
 int showtreesize(char *path);
-int depthfirstapply(char *path, int pathfun(char *path1), int depth);
+int depthfirstapply(char *path, int pathfun(char *path1), int level);
 int sizepathfun(char *path);
-void showformattedusage(long long int size, char *path);
-
-void human(int x);
+void showformattedusage(int size, char *path);
 
 void set_program_name(const char *argv0) {
 	program_name = argv0;
@@ -67,9 +59,9 @@ struct node *create(int value) {
 
 void add(int value) {
 	struct node *current = NULL;
-	if (program_info->inodes == NULL) program_info->inodes = create(value);
+	if (inodes == NULL) inodes = create(value);
 	else {
-		current = program_info->inodes;
+		current = inodes;
 		while (current->next != NULL)
 			current = current->next;
 		current->next = create(value);
@@ -77,188 +69,106 @@ void add(int value) {
 }
 
 bool contains(int value) {
-	struct node *current = program_info->inodes;
-	if (program_info->inodes == NULL) return false;
+	struct node *current = inodes;
+	if (inodes == NULL) return false;
 	for (; current != NULL; current = current->next)
 		if (current->value == value) return true;
 	return false;
 }
 
 void display() {
-	struct node *current = program_info->inodes;
+	struct node *current = inodes;
 	for (; current != NULL; current = current->next)
 		printf("%d\n", current->value);
 }
 
-static bool isBytes = false;
-
-char *formatBytes(int blocks, char *path) {
-//	char *suffix[] = {"", "K", "M", "G"};
-//	char length = sizeof(suffix) / sizeof(suffix[0]);
-//	
-//	int i = 0;
-//	double dblBytes = bytes;
-//	
-//	if (bytes > 1024) {
-//		for (i = 0; (bytes / 1024) > 0 && i < length - 1; i++, bytes /= 1024)
-//			dblBytes = bytes / 1024.0;
-//	}
-//	
-//	static char output[200];
-//	sprintf(output, "%2.1f%s", dblBytes, suffix[i]);
-//	return output;
+void error(const char *fmt, ...) {
+	int n;
+	int size = 100;
+	char *p, *np;
+	va_list ap;
 	
-	bool test = false;
-	if (test) {
-		// assuming blocks are being usaged (512-byte blocks)
-		// 512 * 8 = 4096, 512 * 2 = 1024
-		int scaler = output_block_size;
-		char *s = "KMG";
-		int i = strlen(s);
-		while (blocks >= scaler && i > 1) {
-			blocks /= scaler;
-			i--;
-		}
+	if ((p = malloc(size)) == NULL) return;
+	
+	while (true) {
+		va_start(ap, fmt);
+		n = vsnprintf(p, size, fmt, ap);
+		va_end(ap);
+		
+		if (n < 0) return;
+		
+		if (n < size) break;
+		
+		size = n + 1;
+		
+		if ((np = realloc(p, size)) == NULL) {
+			free(p);
+			return;
+		} else p = np;
 	}
 	
-	bool humanReadable = human_output;
-	char *result = malloc(sizeof(char) * 255);
-	//printf("output_block_size: %d\n", output_block_size);
-	//int block_size = output_block_size;
-	//printf("[%s] [isBytes: %s] ", path, isBytes ? "true" : "false");
-	
-	if (humanReadable) {
-		int bytes = blocks * S_BLKSIZE; // output_block_size;
-		if (strstr(program_info->options, "b") != NULL) bytes = blocks;
-		if (bytes >= 10L * 1000 * 1000 * 1000) sprintf(result, "%lluG", (long long) (bytes / 1e9));
-		else if (bytes >= 1000 * 1000 * 1000) sprintf(result, "%2.fG", (float) (bytes / 1e9));
-		else if (bytes >= 10 * 1000 * 1000) sprintf(result, "%lluM", (long long) (bytes / 1e6));
-		else if (bytes >= 1000 * 1000) sprintf(result, "%2.1fM", (float) (bytes / 1e6));
-		else if (bytes >= 10 * 1000) sprintf(result, "%lluK", (long long) (bytes / 1e3));
-		else if (bytes >= 1000) sprintf(result, "%2.1fK", (float) (bytes / 1e3));
-		else sprintf(result, "%d", bytes);
-//		if (bytes > 10L * (1 << 30)) sprintf(result, "%dG", bytes / (1 << 30));
-//		else if (bytes >= (1 << 30)) sprintf(result, "%2.1fG", (float) (bytes / (1 << 30)));
-//		else if (bytes > 10 * (10 << 20)) sprintf(result, "%dM", bytes / (1 << 20));
-//		else if (bytes > (1 << 20)) sprintf(result, "%2.1fM", (float) (bytes / (1 << 20)));
-//		else if (bytes > 10 * (1 << 10)) sprintf(result, "%dK", bytes / (1 << 10));
-//		else if (bytes > (1 << 10)) sprintf(result, "%2.1fK", (float) (bytes / (1 << 10)));
-//		else sprintf(result, "%d", bytes);
-	} else {
-		if (strstr(program_info->options, "b") != NULL) sprintf(result, "%d", blocks);
-		else {
-			if (strstr(program_info->options, "B") != NULL) {
-				int size = blocks * S_BLKSIZE / output_block_size;
-				if (size < 1) size = 1;
-				if (output_block_size == (1 << 30)) sprintf(result, "%dG", size);
-				else if (output_block_size == (1 << 20)) sprintf(result, "%dM", size);
-				else if (output_block_size == (1 << 10)) sprintf(result, "%dK", size);
-				else sprintf(result, "%d", size);
-			} else {
-				if (strstr(program_info->options, "m") != NULL) {
-					int size = blocks * S_BLKSIZE / output_block_size;
-					if (size < 1) size = 1;
-					sprintf(result, "%d", size);
-				} else sprintf(result, "%d", blocks * S_BLKSIZE / 1024);
-			}
-		}
-	}
-	
-	return result;
-}
-
-void formatBlocks(int blocks) {
-	//int bytes = blocks * S_BLKSIZE;
-	//printf("%d\n", bytes);
-	//formatBytes(bytes);
-}
-
-void printusage(int size, char *path) {
-	char *formattedBytes = formatBytes(size, path);
-	printf("%-7s %s\n", formattedBytes, path);
-}
-
-void traverse(char *path) {
-	DIR *dir;
-	struct dirent *entry;
-	struct stat stats;
-	
-	if (!(dir = opendir(path))) {
-		perror("opendir");
-		return;
-	}
-	
-	while ((entry = readdir(dir)) != NULL) {
-		char *name = entry->d_name;
-		
-		if (strcmp(name, ".") == 0 || strcmp(name, "..") == 0) continue;
-		if (strncmp(name, "f", 1) != 0) continue;
-		
-		char fullpath[255];
-		sprintf(fullpath, "%s/%s", path, name);
-		
-		if (lstat(fullpath, &stats) == -1) {
-			perror("lstat");
-			continue;
-		}
-		
-		int mode = stats.st_mode;
-		
-		if (S_ISREG(mode)) {
-			int size = stats.st_blocks;// / 2;
-			if (size >= 0) printusage(size, fullpath);
-		}
-	}
-}
-
-void error(const char *message) {
-	fprintf(stderr, "%s: %s\n", program_name, message);
-	fprintf(stderr, "Try '%s -h' for more information.", program_name);
+	fprintf(stderr, "%s: %s\n", program_name, p);
 }
 
 void usage(int status) {
-	printf("USAGE\n");
+	if (status != EXIT_SUCCESS) fprintf(stderr, "Try '%s -h' for more information.\n", program_name);
+	else {
+		printf("NAME\n");
+		printf("       %s - estimate file space usage\n", program_name);
+		printf("\nUSAGE:\n");
+		printf("       %s [-h]\n", program_name);
+		printf("       %s [-a] [-B M | -b | -m] [-c] [-d N] [-H] [-L] [-s] <dir1> <dir2> ...\n", program_name);
+		printf("\nDESCRIPTION\n");
+		printf("       -a     : Write count for all files, not just directories\n");
+		printf("       -B M   : Scale sizes by M before printing; for example, -BM prints size in units of 1,048,576 bytes\n");
+		printf("       -b     : Print size in bytes\n");
+		printf("       -c     : Print a grand total\n");
+		printf("       -d N   : Print the total for a directory only if it is N or fewer levels below the command line argument\n");
+		printf("       -h     : Print a help message or usage, and exit\n");
+		printf("       -H     : Human readable; print size in human readable format, for example, 1K, 234M, 2G\n");
+		printf("       -L     : Dereference all symbolic links\n");
+		printf("       -m     : Same as -B 1048576\n");
+		printf("       -s     : Display only a total for each argument\n");
+	}
 	exit(status);
 }
 
+int get_index(char *string, char c) {
+	char *e = strchr(string, c);
+	if (e == NULL) return -1;
+	return (int) (e - string);
+}
+
+void human_options(const char *spec) {
+	if (isdigit(*spec)) output_block_size = atoi(spec);
+	else {
+		apparent_size = false;
+		human_output = false;
+		char *s = "KMG";
+		int i;
+		if ((i = get_index(s, *spec)) == -1) {
+			error("invalid -B argument '%s'", spec);
+			usage(EXIT_FAILURE);
+		} else output_block_size = (1 << (10 * (i + 1)));
+	}
+}
+
 int main(int argc, char **argv) {
-	program_info = malloc(sizeof(struct pinfo));
-	
-//	add(1);
-//	add(2);
-//	add(3);
-//	printf("has 1: %s\n", contains(1) ? "true" : "false");
-//	printf("has 2: %s\n", contains(2) ? "true" : "false");
-//	printf("has 3: %s\n", contains(3) ? "true" : "false");
-//	printf("has 4: %s\n", contains(4) ? "true" : "false");
-//	display();
-//	return 0;
-	
 	set_program_name(argv[0]);
 	
-	//program_info = malloc(sizeof(struct pinfo));
-	program_info->program_name = argv[0];
-	
 	bool max_depth_specified = false;
-	//bool symlink_deref = false;
 	bool opt_summarize_only = false;
-	
-	//traverse(".");
-	//formatBytes(atoi(argv[1]));
-	//printf("\n");
-	//formatBlocks(atoi(argv[2]));
-	//return 0;
+	bool ok = true;
 	
 	int opt;
 	while ((opt = getopt(argc, argv, "habd:cHmsB:L")) != -1) {
 		char str[2];
 		sprintf(str, "%c", opt);
-		strcat(program_info->options, str);
+		strcat(options, str);
 		
 		switch (opt) {
 			case 'h':
 				usage(EXIT_SUCCESS);
-				break;
 			case 'a':
 				opt_all = true;
 				break;
@@ -275,43 +185,32 @@ int main(int argc, char **argv) {
 				output_block_size = 1;
 				break;
 			case 'd':
-				if (isdigit(*optarg)) max_depth = atoi(optarg);
-				else {
-					fprintf(stderr, "%s: invalid maximum depth ‘%s’\n", program_name, optarg);
-					fprintf(stderr, "Try '%s -h' for more information.\n", program_name);
+				if (isdigit(*optarg)) {
+					max_depth_specified = true;
+					max_depth = atoi(optarg);
+				} else {
+					error("invalid maximum depth '%s'", optarg);
+					ok = false;
 				}
 				break;
 			case 'm':
-				//human_output = true;
 				output_block_size = 1024 * 1024;
 				break;
 			case 's':
 				opt_summarize_only = true;
 				break;
 			case 'B':
-				if (isdigit(*optarg)) output_block_size = atoi(optarg);
-				else {
-					//human_output = true;
-					if (strcmp(optarg, "G") == 0) output_block_size = 1024 * 1024 * 1024;
-					else if (strcmp(optarg, "M") == 0) output_block_size = 1024 * 1024;
-					else if (strcmp(optarg, "K") == 0) output_block_size = 1024;
-					else {
-						fprintf(stderr, "%s: invalid -B argument '%s'\n", program_name, optarg);
-						fprintf(stderr, "Try '%s -h' for more information.", program_name);
-					}
-				}
+				human_options(optarg);
 				break;
 			case 'L':
-				//symlink_deref = true;
+				symlink_deref = true;
 				break;
-			//case 'd':
-			//	program_info->max_depth = atoi(optarg);
-			//	break;
-			//case 'm':
-			//	program_info->scaler = 1024 * 1024;
-			//	break;
+			default:
+				ok = false;
 		}
 	}
+	
+	if (!ok) usage(EXIT_FAILURE);
 	
 	if (opt_all && opt_summarize_only) {
 		error("cannot both summarize and show all entries");
@@ -319,18 +218,17 @@ int main(int argc, char **argv) {
 	}
 	
 	if (opt_summarize_only && max_depth_specified && max_depth == 0) {
+		error("warning: summarizing is the same as using --max-depth=0");
+	}
+	
+	if (opt_summarize_only && max_depth_specified && max_depth != 0) {
+		error("warning: summarizing conflicts with --max-depth=%d", max_depth);
+		usage(EXIT_FAILURE);
 	}
 	
 	if (opt_summarize_only) {
 		max_depth = 0;
 	}
-	
-	//return 0;
-	
-//	if (strstr(program_info->options, "a") != NULL && strstr(program_info->options, "s") != NULL) {
-//		fprintf(stderr, "%s: cannot both summarize and show all entries\nTry '%s -h' for more information.\n", program_info->program_name, program_info->program_name);
-//		return EXIT_FAILURE;
-//	}
 	
 	char *pwd = ".";
 	int totalsize = 0;
@@ -338,28 +236,18 @@ int main(int argc, char **argv) {
 	if (argv[optind] == NULL) {
 		int size = showtreesize(pwd);
 		totalsize += size;
-		//if (strstr(program_info->options, "s") != NULL) showformattedusage(size, pwd);
 	} else {
 		for (; optind < argc; optind++) {
 			char *path = argv[optind];
 			int size = sizepathfun(path);
-//			printf("TEST: %d\n", size);
 			if (size >= 0) {
 				totalsize += size;
 				showformattedusage(size, path);
 			} else totalsize += showtreesize(path);
-//			printf("==========\n");
-//			display();
-//			printf("==========\n");
-			//if (strstr(program_info->options, "s") != NULL) showformattedusage(size, path);
 		}
 	}
 	
-	//display();
-	
-	if (strstr(program_info->options, "c") != NULL) showformattedusage(totalsize, "total");
-	
-	//human(2069);
+	if (strstr(options, "c") != NULL) showformattedusage(totalsize, "total");
 	
 	return EXIT_SUCCESS;
 }
@@ -372,18 +260,18 @@ int showtreesize(char *path) {
 		return -1;
 	}
 	
-	int size = depthfirstapply(path, sizepathfun, 0);
+	int size = depthfirstapply(path, sizepathfun, 1);
 	
-	if (strstr(program_info->options, "b") != NULL) size += stats.st_size;
-	else size += stats.st_blocks;// / 2;
+	if (apparent_size) size += stats.st_size;
+	else size += stats.st_blocks;
 	
 	showformattedusage(size, path);
 	
 	return size;
 }
 
-int depthfirstapply(char *path, int pathfun(char *path1), int depth) {
-	if (strstr(program_info->options, "d") != NULL && depth > program_info->max_depth) return -1;
+int depthfirstapply(char *path, int pathfun(char *path1), int level) {
+	if (strstr(options, "d") != NULL && level > max_depth) return -1;
 	
 	int result = 0;
 	
@@ -412,27 +300,20 @@ int depthfirstapply(char *path, int pathfun(char *path1), int depth) {
 		
 		if (strcmp(name, ".") == 0 || strcmp(name, "..") == 0) continue;
 		
-		if (contains(inode)) {
-//			printf("inode %d exists: %s\n", inode, fullpath);
-			//display();
-			continue;
-		}
+		if (contains(inode)) continue;
 		add(inode);
-//		display();
-		
-//		printf("inode: %d, fullpath: %s\n", inode, fullpath);
 		
 		if (S_ISDIR(mode)) {
-			int size = depthfirstapply(fullpath, pathfun, depth + 1);
+			int size = depthfirstapply(fullpath, pathfun, level + 1);
 			
-			if (strstr(program_info->options, "b") != NULL) size += stats.st_size;
-			else size += stats.st_blocks;// / 2;
+			if (apparent_size) size += stats.st_size;
+			else size += stats.st_blocks;
 			
 			if (size >= 0) {
 				result += size;
-				if (strstr(program_info->options, "s") == NULL) showformattedusage(size, fullpath);
+				if (strstr(options, "s") == NULL) showformattedusage(size, fullpath);
 			}
-		} else if (S_ISLNK(mode) && strstr(program_info->options, "L") != NULL) {
+		} else if (S_ISLNK(mode) && symlink_deref) {
 			if (stat(fullpath, &stats) == -1) {
 				perror("stat");
 				return -1;
@@ -440,27 +321,30 @@ int depthfirstapply(char *path, int pathfun(char *path1), int depth) {
 			
 			inode = stats.st_ino;
 			
-			int size = depthfirstapply(fullpath, pathfun, depth + 1);
+			if (contains(inode)) continue;
+			add(inode);
 			
-			if (strstr(program_info->options, "b") != NULL) size += stats.st_size;
-			else size += stats.st_blocks;// / 2;
+			int size = depthfirstapply(fullpath, pathfun, level + 1);
+			
+			if (apparent_size) size += stats.st_size;
+			else size += stats.st_blocks;
 			
 			if (size >= 0) {
 				result += size;
-				if (strstr(program_info->options, "s") == NULL) showformattedusage(size, fullpath);
+				if (strstr(options, "s") == NULL) showformattedusage(size, fullpath);
 			}
 		} else {
 			int size = pathfun(fullpath);
 			
 			if (size >= 0) {
 				result += size;
-				if (strstr(program_info->options, "a") != NULL) showformattedusage(size, fullpath);
+				if (strstr(options, "a") != NULL) showformattedusage(size, fullpath);
 			} else {
 				int s = 0;
-				if (strstr(program_info->options, "b") != NULL) s = stats.st_size;
-				else s = stats.st_blocks;// / 2;
+				if (apparent_size) s = stats.st_size;
+				else s = stats.st_blocks;
 				result += s;
-				if (strstr(program_info->options, "a") != NULL && strstr(program_info->options, "s") == NULL) showformattedusage(s, fullpath);
+				if (opt_all && strstr(options, "s") == NULL) showformattedusage(s, fullpath);
 			}
 		}
 	}
@@ -478,73 +362,52 @@ int sizepathfun(char *path) {
 		return -1;
 	}
 	
-	//int inode = stats.st_ino;
-	//if (contains(inode)) return 0;
-	//add(inode);
-	
 	if (S_ISREG(stats.st_mode)) {
 		int size = 0;
-		if (strstr(program_info->options, "b") != NULL) size = stats.st_size;
-		else size = stats.st_blocks;// / 2;
+		if (apparent_size) size = stats.st_size;
+		else size = stats.st_blocks;
 		return size;
 	}
 	
 	return -1;
 }
 
-void human(int x) {
-	char *s = "KMGTEPYZ";
-	int i = strlen(s);
-	while (x >= 1024 && i > 1) {
-		x /= 1024;
-		i--;
-	}
-	//printf("%d%c\n", x, s[strlen(s) - i - 1]);
-}
-
-void showformattedusage(long long int size, char *path) {
-//	return;
-	//isBytes = !isBytes;
-	isBytes = apparent_size;
-	printusage(size, path);
-	//isBytes = !isBytes;
-	return;
-	const char *sizesuffix = " ";
-	if (strstr(program_info->options, "H") != NULL) {
-		//if (strstr(program_info->options, "b") != NULL) {
-		//	long double ss = size;
-		//	char *s = "KMGTEPYZ";
-		//	int i = strlen(s);
-		//	while (ss >= 1024 && i > 1) {
-		//		ss /= 1024;
-		//		i--;
-		//	}
-		//	ss += 0.5;
-		//	char buf[2];
-		//	sprintf(buf, "%c", s[strlen(s) - i - 1]);
-		//	sizesuffix = buf;
-		//	size = ss;
-		//}// else {
-			if (size >= 1e9) {
-				size = (long long) (size / 1e9) ;
-				sizesuffix = "G";
-			} else if (size >= 1e6) {
-				size = (long long) (size / 1e6);
-				sizesuffix = "M";
-			} else if (size >= 1e3) {
-				size = (long long) (size / 1e3);
-				sizesuffix = "K";
+void showformattedusage(int size, char *path) {
+	char *result = malloc(sizeof(char) * 255);
+	
+	if (human_output) {
+		int bytes = size * S_BLKSIZE;
+		
+		if (apparent_size) bytes = size;
+		
+		if (bytes >= 10L * (1 << 30)) sprintf(result, "%dG", bytes / (1 << 30));
+		else if (bytes >= (1 << 30)) sprintf(result, "%2.1fG", (float) (bytes / 1e9));
+		else if (bytes >= 10 * (1 << 20)) sprintf(result, "%dM", bytes / (1 << 20));
+		else if (bytes >= (1 << 20)) sprintf(result, "%2.1fM", (float) (bytes / 1e6));
+		else if (bytes >= 10 * (1 << 10)) sprintf(result, "%dK", bytes / (1 << 10));
+		else if (bytes >= (1 << 10)) sprintf(result, "%2.1fK", (float) (bytes / 1e3));
+		else sprintf(result, "%d", bytes);
+	} else {
+		if (apparent_size) sprintf(result, "%d", size);
+		else {
+			if (output_block_size > 1) { //strstr(options, "B") != NULL) {
+				size = size * S_BLKSIZE / output_block_size;
+				
+				if (size < 1) size = 1;
+				
+				if (output_block_size == (1 << 30)) sprintf(result, "%dG", size);
+				else if (output_block_size == (1 << 20)) sprintf(result, "%dM", size);
+				else if (output_block_size == (1 << 10)) sprintf(result, "%dK", size);
+				else sprintf(result, "%d", size);
+			} else {
+				if (strstr(options, "m") != NULL) {
+					size = size * S_BLKSIZE / output_block_size;
+					if (size < 1) size = 1;
+					sprintf(result, "%d", size);
+				} else sprintf(result, "%d", size * S_BLKSIZE / 1024);
 			}
-		//}
+		}
 	}
 	
-	if (strstr(program_info->options, "B") != NULL) {
-		size /= program_info->scaler;
-		if (size < 1) size = 1;
-	}
-	
-	char str[8];
-	sprintf(str, "%llu%s", size, sizesuffix);
-
-	printf("%-7s %s\n", str, path);
+	printf("%-7s %s\n", result, path);
 }
