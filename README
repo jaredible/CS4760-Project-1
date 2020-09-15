@@ -1,6 +1,6 @@
 # CS4760 Project 1: Linux System Calls and Library Functions
 
-### ADJUSTMENTS
+##### ADJUSTMENTS
 - removed responsibility from `sizepathfun` and instead had `depthfirstapply` be responsible (Approved by Bhatia)
 - responsibility of outputting size and path are given to `sizepathfun` (Approved by Bhatia)
 - the method `showtreesize` was changed to instead only be responsible for displaying the size of the directory rooted at path (Approved by Bhatia)
@@ -9,6 +9,11 @@
 - added a linked-list data structure (struct inode) to handle remembering which inodes have been visiting during DFS
 - added several utility functions: `program_name`, `get_index`, `error`, `usage`, and `human_options`
 - using several global variables to know of which options are enabled
+--------------------------------------------------------------------------------
+##### ISSUES
+- executing `./mydu -abc . mydu.c` will output mydu.c twice
+- symbolic link cycles (infinite loops) not accounted for
+- executing `./mydu` with a non-existant file will error a bit incorrectly
 --------------------------------------------------------------------------------
 ##### HOW TO RUN
 1. In your command promt, type: `make`
