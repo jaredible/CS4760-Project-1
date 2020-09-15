@@ -6,7 +6,7 @@
 - the method `showtreesize` was changed to instead only be responsible for displaying the size of the directory rooted at path (Approved by Bhatia)
 - added a method, `showformattedusage`, that is only responsible for outputting a size and path (Approved by Bhatia)
 - added another method, `sizeoptions`, that is only responsible for getting a file's status' size in bytes or blocks (Approved by Bhatia)
-- added a linked-list data structure (struct inode) to handle remembering which inodes have been visiting during DFS
+- added a linked-list data structure (struct inode) to handle remembering which inodes have been visited during DFS
 - added several utility functions: `program_name`, `get_index`, `error`, `usage`, and `human_options`
 - using several global variables to know of which options are enabled
 --------------------------------------------------------------------------------
