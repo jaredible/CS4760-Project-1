@@ -11,6 +11,9 @@
 5. For more options with this program, type: `./mydu -h`
 --------------------------------------------------------------------------------
 ##### CHANGELOG
+- Date: Mon Sep 14 22:29:51 2020 -0500
+  - Renamed README
+
 - Date: Mon Sep 14 22:05:18 2020 -0500
   - Added new source
 
