@@ -96,7 +96,7 @@ int get_index(char *string, char c) {
 	return (int) (e - string);
 }
 
-/* Used for displaying formatted error string. */
+/* Used for displaying a formatted error string. */
 void error(const char *fmt, ...) {
 	int n;
 	int size = 100;
