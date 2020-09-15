@@ -16,7 +16,7 @@
 - executing `./mydu` with a non-existant file will error a bit incorrectly
 --------------------------------------------------------------------------------
 ##### HOW TO RUN
-1. In your command promt, type: `make`
+1. In your command prompt, type: `make`
 2. This will generate an object and executable file.
 3. To use the program, type: `./mydu`
 4. You then will see a list of directories, from your current working directory, with their block sizes.
