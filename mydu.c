@@ -6,7 +6,8 @@
  * Date: September 14, 2020
  * Description: Displays the size of subdirectories of the tree rooted at the
  *              directories/files specified on the command-line arguments.
- * Source(s): https://github.com/coreutils/coreutils/blob/master/src/du.c */
+ * Source(s): https://github.com/coreutils/coreutils/blob/master/src/du.c
+ *            https://github.com/zegster/operating-system/tree/master/hw1 */
 
 #include <ctype.h>
 #include <dirent.h>
@@ -95,7 +96,7 @@ int get_index(char *string, char c) {
 	return (int) (e - string);
 }
 
-/* used for displaying formatted error string. */
+/* Used for displaying formatted error string. */
 void error(const char *fmt, ...) {
 	int n;
 	int size = 100;
